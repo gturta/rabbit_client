@@ -6,6 +6,7 @@ pub struct Config {
     pub rabbitmq_password: String,
     pub rabbitmq_stream: String,
     pub push_url: String,
+    pub local_storage: String,
 }
 
 impl Default for Config{
@@ -17,6 +18,7 @@ impl Default for Config{
             rabbitmq_password: String::from("guest"),
             rabbitmq_stream: String::from("stream01"),
             push_url: String::from("http://localhost:7878/push"),
+            local_storage: "/tmp/rabbit_consumer_storage".to_string(),
         }
     }
 }

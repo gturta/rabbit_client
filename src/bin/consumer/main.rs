@@ -5,6 +5,9 @@ use tracing::info;
 use tokio::sync::mpsc;
 
 use rabbit_client::config::Config;
+use rabbit_client::error::AppError;
+use offset_tracker::OffsetTracker;
+mod offset_tracker;
 
 struct MyMessage {
     data: String,
@@ -23,45 +26,53 @@ async fn main() {
 
     let (tx, rx) = mpsc::channel(100);
 
-    let h1 = tokio::spawn(async move{
-        rabbitmq_reader(&config_clone, tx).await;
-    });
+    tokio::select! {
+        res = rabbitmq_reader(&config_clone, tx) => {info!("rabbitmq_reader ended: {res:?}");},
+        res = push_sender(&config, rx) => {info!("push_sender ended: {res:?}");},
+    };
 
-    let h2 = tokio::spawn(async move{
-        push_sender(&config, rx).await;
-    });
-
-    let _r = tokio::join!(h1, h2);
 }
 
-async fn push_sender(config: &Config, mut rx: mpsc::Receiver<MyMessage>) {
+async fn push_sender(config: &Config, mut rx: mpsc::Receiver<MyMessage>) -> Result<(), AppError> {
     let client = reqwest::Client::new();
 
     while let Some(message) = rx.recv().await {
         client.post(config.push_url.clone())
             .body(message.data)
-            .send().await.unwrap();
+            .send().await?;
     }
+    Ok(())
 }
 
-async fn rabbitmq_reader(config: &Config, tx: mpsc::Sender<MyMessage>){
+async fn rabbitmq_reader(config: &Config, tx: mpsc::Sender<MyMessage>) -> Result<(), AppError> {
     let env = Environment::builder()
         .host(&config.rabbitmq_host)
         .port(config.rabbitmq_port)
         .username(&config.rabbitmq_user)
         .password(&config.rabbitmq_password)
-        .build().await.expect("RabbitMQ should be available");
+        .build().await?;
+
+    //this will persist the current position in the stream
+    let offset_tracker_opt = OffsetTracker::new("rabbit_consumer_offset".to_string(), &config.local_storage).ok();
+
+    //get the locally stored offset from which to start consuming or start from First
+    let offset_spec = if let Some(tracker) = offset_tracker_opt.as_ref() {
+        if let Ok(Some(offset)) = tracker.read() {
+            OffsetSpecification::Offset(offset)
+        }else { OffsetSpecification::First }
+    } else { OffsetSpecification::First };
+
+    info!("Starting reading loop from offset {:?}", offset_spec);
 
     let mut consumer = env.consumer()
-        .offset(OffsetSpecification::First)
+        .offset(offset_spec)
         .build(&config.rabbitmq_stream).await.expect("Stream should be available");
 
     let handle = consumer.handle();
 
-    info!("Starting reading loop");
     let mut counter = 0;
-    while let Some(message) = consumer.next().await {
-        if let Some(data) = message.unwrap().message().data() {
+    while let Some(Ok(message)) = consumer.next().await {
+        if let Some(data) = message.message().data() {
             let data = String::from_utf8(data.to_vec()).unwrap(); 
             //output some feedback
             counter +=1;
@@ -72,6 +83,11 @@ async fn rabbitmq_reader(config: &Config, tx: mpsc::Sender<MyMessage>){
             //send to channel
             tx.send(MyMessage{ data }).await.unwrap();
 
+            //persist the current offset
+            if let Some(tracker) = offset_tracker_opt.as_ref() {
+                let offset = message.offset();
+                tracker.write(offset);
+            }
         }
 
         if counter >= 100_000 {
@@ -80,4 +96,5 @@ async fn rabbitmq_reader(config: &Config, tx: mpsc::Sender<MyMessage>){
     }
     info!("Reading loop ended");
     handle.close().await.unwrap();
+    Ok(())
 }
