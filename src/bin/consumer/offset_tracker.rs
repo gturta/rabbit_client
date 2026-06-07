@@ -1,5 +1,6 @@
 use rabbit_client::error::AppError;
 use tokio::sync::mpsc;
+use tokio::time;
 
 pub struct OffsetTracker{
     name: String,
@@ -45,9 +46,17 @@ pub struct AsyncOffsetTracker {
 }
 impl AsyncOffsetTracker {
     pub async fn process_task(mut rx: mpsc::Receiver<u64>, db: sled::Db, name: String) {
+        //let's do a flush every 200ms; this is the start time
+        let mut last_flush = time::Instant::now();
+       
+        //offset persistence worker main cycle
         while let Some(value) = rx.recv().await {
             db.insert(&name, &value.to_be_bytes()).expect("failed writing offset into sled db");
-            db.flush_async().await.expect("failed flush operation for sled db");
+            //let's do a flush every 200ms
+            if last_flush + time::Duration::from_millis(200) < time::Instant::now() {
+                db.flush_async().await.expect("failed flush operation for sled db");
+                last_flush = time::Instant::now();
+            }
         }
     }
 

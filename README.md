@@ -57,13 +57,13 @@ Config variables are directly in src/config.rs, these are default values:
 
 Speed test have been peformed in three configurations:
 
-1. No stream offset is persisted by the consumer
+#### 1. No stream offset is persisted by the consumer
  > Consumer process speed: *30_000* msg/s
 
-2. The consumer persists the offset in a synchronous manner, using a sync flush after each message.
+#### 2. The consumer persists the offset in a synchronous manner, using a sync flush after each message.
  > Consumer process speed: ~ *250* msg/s.
 
-3. The consumer persists the offset using a separate async worker with a buffer of 10.  
+#### 3. The consumer persists the offset using a separate async worker with a buffer of 10.  
 Of course in case of a consumer crash it's offset counter could be 10 message behind.
  > Consumer process speed: ~ *250* msg/s.
 
@@ -73,6 +73,19 @@ Which will in fact **syncronize** the message processing with the persistence wo
 
 Increasing the buffer is *not* a solution, as this will leave the persisted offset behind the actual reads.
 
-**Conclusion:** for maximum speed do not persist the read offset, find other method to identify the last message.
-Or just embrace the speed penalty and go full sync with the offset persistence.
+#### 4. Same as 3 except the flush is now done just every other 200ms.
+
+Crash simulation:
+ - last message in push_mock: 59488
+ - last persisted offset: 59309
+ Persisted offset is 179 messages behind.
+
+ > Speed: *3_125* msg/s
+
+
+**Conclusion:**  
+For maximum speed do not persist the read offset, find other method to identify the last message.
+Or persist it on an interval, like in test 4 above.
+
+Otherwise, just embrace the speed penalty and go full sync with the offset persistence.
 
