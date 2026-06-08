@@ -2,12 +2,14 @@
 
 This is a small tester for consuming RabbitMQ streams.
 
-It's a cargo crate with three programs:
-1. producer
-2. consumer
+It's a cargo crate with 5 programs:
+1. stream_producer
+2. stream_consumer
 3. push_mock
+4. queue_producer
+5. queue_consumer
 
-## Producer
+## Stream Producer
 
 Just connects to RabbitMQ stream, writes 100_000 messages like:
 
@@ -15,7 +17,7 @@ Just connects to RabbitMQ stream, writes 100_000 messages like:
 
 It's only purpose is to fill the stream with test data.
 
-## Consumer
+## Stream Consumer
 
 Connects to the stream and starts reading messages.
 For each message makes a http call to `http://localhost:7878/push` with the body set to the read message.
@@ -39,7 +41,16 @@ Test results are summarized at the end.
 
 The `push_mock` is just a http server listening on :7878.
 For each `post` on `/push` it will output an info log message.
+Now the push_mock will also sleep 200ms before returning.
 
+## Queue consumer
+
+Connects to a queue using classic AMQP protocol.
+Reads from queue and for each message spawns a new task (green thread) on which:
+ - calls the push endpoint
+ - on endpoint completion sends ACK to rabbitmq
+
+In order to avoid flooding the number of processing tasks is limited to 100 using a semaphore.
 
 ### Config
 Config variables are directly in src/config.rs, these are default values:
@@ -53,7 +64,7 @@ Config variables are directly in src/config.rs, these are default values:
     local_storage: "/tmp/rabbit_consumer_storage".to_string(),
 
 
-### Test results
+### Stream Test results
 
 Speed test have been peformed in three configurations:
 
@@ -89,3 +100,6 @@ Or persist it on an interval, like in test 4 above.
 
 Otherwise, just embrace the speed penalty and go full sync with the offset persistence.
 
+### Queue Test results
+
+With a maximum of 100 paralel process threads the speed of consuming is: **480 msg/s**
