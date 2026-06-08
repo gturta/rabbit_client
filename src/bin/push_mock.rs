@@ -20,5 +20,6 @@ async fn main() {
 
 async fn push_message(body: String) {
     info!(body);
+    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
 }
 
