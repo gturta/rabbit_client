@@ -1,15 +1,13 @@
 use lapin::{Connection, ConnectionProperties, options};
 use tracing_subscriber::FmtSubscriber;
 use tracing::info;
-use tokio::sync::mpsc;
 use futures::stream::StreamExt;
+use tokio::task::JoinSet;
+use tokio::sync::Semaphore;
+use std::sync::Arc;
 
 use rabbit_client::config::Config;
 use rabbit_client::error::AppError;
-
-struct MyMessage {
-    data: String,
-}
 
 #[tokio::main]
 async fn main() {
@@ -19,30 +17,24 @@ async fn main() {
     info!("Consumer starting");
     
     let config = Config::default();
-    let config_clone = config.clone();
 
 
-    let (tx, rx) = mpsc::channel(100);
-
-    tokio::select! {
-        res = rabbitmq_reader(&config_clone, tx) => {info!("rabbitmq_reader ended: {res:?}");},
-        res = push_sender(&config, rx) => {info!("push_sender ended: {res:?}");},
-    };
+    tokio::spawn( async move{
+        rabbitmq_reader(config).await.unwrap();
+    }).await.unwrap();
 }
 
 
-async fn push_sender(config: &Config, mut rx: mpsc::Receiver<MyMessage>) -> Result<(), AppError> {
+async fn push_sender(config: Config, data: String) -> Result<(), AppError> {
     let client = reqwest::Client::new();
 
-    while let Some(message) = rx.recv().await {
-        client.post(config.push_url.clone())
-            .body(message.data)
-            .send().await?;
-    }
+    client.post(config.push_url.clone())
+        .body(data)
+        .send().await?;
     Ok(())
 }
 
-async fn rabbitmq_reader(config: &Config, tx: mpsc::Sender<MyMessage>) -> Result<(), AppError> {
+async fn rabbitmq_reader(config: Config) -> Result<(), AppError> {
     info!("Starting reading loop");
 
     let addr = format!("amqp://{}:{}@{}:{}", config.rabbitmq_user, config.rabbitmq_password, config.rabbitmq_host, config.rabbitmq_amqp_port);
@@ -61,21 +53,40 @@ async fn rabbitmq_reader(config: &Config, tx: mpsc::Sender<MyMessage>) -> Result
         .await.expect("Could not instantiate consumer");
 
     let mut counter = 0;
+    //this is to join spawned tasks that call push
+    let mut join_set = JoinSet::new();
+    //and this to limit the number of spawned tasks to 100
+    let semaphore = Arc::new(Semaphore::new(100));
+
     while let Some(Ok(delivery)) = consumer.next().await {
 
-        let data = String::from_utf8(delivery.data).unwrap_or("invalid message format".to_string());
+        let data = String::from_utf8(delivery.data.clone()).unwrap_or("invalid message format".to_string());
         //output some feedback
         counter +=1;
         if counter % 10_000 == 0 {
             info!("reached {}, {}", counter, data.clone());
         }
 
-        //send to channel
-        tx.send(MyMessage{ data }).await.unwrap();
+        //acquire permit before spawning new task
+        let permit = semaphore.clone().acquire_owned().await.unwrap();
+
+        let config_clone = config.clone();
+        join_set.spawn(async move {
+            //send to push
+            push_sender(config_clone, data).await.unwrap();
+            //and acknoledge
+            delivery.ack(lapin::options::BasicAckOptions::default()).await.expect("could not deliver ack");
+            //release permit
+            drop(permit);
+        });
 
         if counter >= 100_000 {
             break;
         }
+    }
+    //wait for all tasks in join_set
+    while let Some(res) = join_set.join_next().await {
+        res.unwrap(); //ignore error
     }
     info!("Reading loop ended");
     Ok(())
