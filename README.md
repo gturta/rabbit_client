@@ -37,12 +37,6 @@ If not found it will start from the first message in the stream.
 PS: I also ran the test with offset saving disabled, just to see the speed impact.
 Test results are summarized at the end.
 
-## Push mockup
-
-The `push_mock` is just a http server listening on :7878.
-For each `post` on `/push` it will output an info log message.
-Now the push_mock will also sleep 200ms before returning.
-
 ## Queue consumer
 
 Connects to a queue using classic AMQP protocol.
@@ -51,6 +45,16 @@ Reads from queue and for each message spawns a new task (green thread) on which:
  - on endpoint completion sends ACK to rabbitmq
 
 In order to avoid flooding the number of processing tasks is limited to 100 using a semaphore.
+Furthermore, there is a consumer prefetch count set on the channel with channel.basicQos.
+This will also limit the number of msg the server will deliver without receiving ack for them.
+
+
+
+## Push mockup
+
+The `push_mock` is just a http server listening on :7878.
+For each `post` on `/push` it will output an info log message.
+Now the push_mock will also sleep 200ms before returning.
 
 ### Config
 Config variables are directly in src/config.rs, these are default values:
@@ -102,4 +106,6 @@ Otherwise, just embrace the speed penalty and go full sync with the offset persi
 
 ### Queue Test results
 
-With a maximum of 100 paralel process threads the speed of consuming is: **480 msg/s**
+For a max 10 parallel workers the speed is around 48msg/sec.
+With a maximum of 100 paralel process threads the speed of consuming is: **480 msg/s**.
+PS: in order to increase the number both prefetch_count and thread semaphore must be set.
