@@ -46,6 +46,7 @@ async fn rabbitmq_reader(config: Config) -> Result<(), AppError> {
         options::QueueDeclareOptions::durable(),
         lapin::types::FieldTable::default())
         .await.expect("could not declare queue");
+    channel.basic_qos(1000, options::BasicQosOptions::default()).await.unwrap();
 
     let mut consumer = channel.basic_consume(config.rabbitmq_queue.clone().into(), "queue_consumer".into(),
         options::BasicConsumeOptions::default(),

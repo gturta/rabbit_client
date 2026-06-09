@@ -22,7 +22,7 @@ impl OffsetTracker{
         Ok(maybe_u64)
     }
 
-    pub fn write(&self, offset: u64){
+    pub fn _write(&self, offset: u64){
         self.db.insert(&self.name, &offset.to_be_bytes()).expect("failed writing offset into sled db");
         self.db.flush().expect("failed flush operation for sled db");
     }
